@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	max := int64(10000000)
+	max := 10000000
 	valueSize := 200
 
 	value := make([]byte, valueSize, valueSize)
@@ -23,13 +23,27 @@ func main() {
 		value[i] = byte(rand.Intn(255))
 	}
 
-	if err := writeSingleFileAppend(max, 2048, value); err != nil {
+	values := make(chan []byte, 1024)
+	go func() {
+		defer close(values)
+
+		value := make([]byte, valueSize, valueSize)
+		for index, _ := range value {
+			value[index] = byte(rand.Intn(255))
+		}
+
+		for i := 0; i < max; i++ {
+			values <- value
+		}
+	}()
+
+	if err := writeSingleFileAppend(2048, values); err != nil {
 		fmt.Printf("goleveldb failed: %v\n", err.Error())
 	}
-	if err := writeWithGoleveldb(max, 2048, value); err != nil {
+	if err := writeWithGoleveldb(2048, values); err != nil {
 		fmt.Printf("goleveldb failed: %v\n", err.Error())
 	}
-	if err := writeWiteLevigo(max, 2048, value); err != nil {
+	if err := writeWiteLevigo(2048, values); err != nil {
 		fmt.Printf("levigo failed: %v\n", err.Error())
 	}
 
@@ -38,7 +52,7 @@ func main() {
 	// }
 }
 
-func writeSingleFileAppend(max int64, batchsize int, value []byte) error {
+func writeSingleFileAppend(batchsize int, values chan []byte) error {
 	file, err := ioutil.TempFile("", "fileappend_")
 	if err != nil {
 		panic(err)
@@ -50,28 +64,31 @@ func writeSingleFileAppend(max int64, batchsize int, value []byte) error {
 
 	startedAt := time.Now()
 
-	for key := int64(0); key < max; key++ {
+	var sequence int64
+	for value := range values {
 		_, err := file.Write(value)
 		if err != nil {
 			return err
 		}
 
-		if key%int64(batchsize) == 0 {
+		if sequence%int64(batchsize) == 0 {
 			if err := file.Sync(); err != nil {
 				return err
 			}
 		}
+		sequence++
 	}
 	if err := file.Sync(); err != nil {
 		return err
 	}
 
 	duration := time.Since(startedAt)
-	fmt.Printf("fileappend: wrote %v msgs in %v, %.0f msgs/s\n", max, duration, float64(max)/duration.Seconds())
+	messageCount := sequence + 1
+	fmt.Printf("fileappend: wrote %v msgs in %v, %.0f msgs/s\n", messageCount, duration, float64(messageCount)/duration.Seconds())
 	return nil
 }
 
-func writeWithGocask(max int64, value []byte) error {
+func writeWithGocask(batchsize int, values chan []byte) error {
 	directory, err := ioutil.TempDir("", "bitcask_")
 	if err != nil {
 		panic(err)
@@ -85,13 +102,15 @@ func writeWithGocask(max int64, value []byte) error {
 	defer os.Remove(directory)
 
 	startedAt := time.Now()
-	for key := int64(0); key < max; key++ {
+
+	var sequence int64
+	for value := range values {
 		err := storage.Put(string(
 			[]byte{
-				byte(key << 24),
-				byte(key << 16),
-				byte(key << 8),
-				byte(key << 0),
+				byte(sequence << 24),
+				byte(sequence << 16),
+				byte(sequence << 8),
+				byte(sequence << 0),
 			}), value)
 
 		if err != nil {
@@ -100,11 +119,12 @@ func writeWithGocask(max int64, value []byte) error {
 	}
 
 	duration := time.Since(startedAt)
-	fmt.Printf("gocask: wrote %v msgs in %v, %.0f msgs/s\n", max, duration, float64(max)/duration.Seconds())
+	messageCount := sequence + 1
+	fmt.Printf("gocask: wrote %v msgs in %v, %.0f msgs/s\n", messageCount, duration, float64(messageCount)/duration.Seconds())
 	return nil
 }
 
-func writeWiteLevigo(max int64, batchsize int, value []byte) error {
+func writeWiteLevigo(batchsize int, values chan []byte) error {
 	directory, err := ioutil.TempDir("", "levigo_")
 	if err != nil {
 		return err
@@ -129,31 +149,34 @@ func writeWiteLevigo(max int64, batchsize int, value []byte) error {
 	startedAt := time.Now()
 
 	batch := levigo.NewWriteBatch()
-	for key := int64(0); key < max; key++ {
+	var sequence int64
+	for value := range values {
 		batch.Put([]byte{
-			byte(key << 24),
-			byte(key << 16),
-			byte(key << 8),
-			byte(key << 0),
+			byte(sequence << 24),
+			byte(sequence << 16),
+			byte(sequence << 8),
+			byte(sequence << 0),
 		}, value)
 
-		if key%int64(batchsize) == 0 {
+		if sequence%int64(batchsize) == 0 {
 			if err := db.Write(sync, batch); err != nil {
 				return err
 			}
 			batch.Clear()
 		}
+		sequence++
 	}
 	if err := db.Write(sync, batch); err != nil {
 		return err
 	}
 
 	duration := time.Since(startedAt)
-	fmt.Printf("levigo: wrote %v msgs in %v, %.0f msgs/s\n", max, duration, float64(max)/duration.Seconds())
+	messageCount := sequence + 1
+	fmt.Printf("levigo: wrote %v msgs in %v, %.0f msgs/s\n", messageCount, duration, float64(messageCount)/duration.Seconds())
 	return nil
 }
 
-func writeWithGoleveldb(max int64, batchsize int, value []byte) error {
+func writeWithGoleveldb(batchsize int, values chan []byte) error {
 	directory, err := ioutil.TempDir("", "goleveldb_")
 	if err != nil {
 		return err
@@ -171,26 +194,29 @@ func writeWithGoleveldb(max int64, batchsize int, value []byte) error {
 	startedAt := time.Now()
 
 	batch := new(leveldb.Batch)
-	for key := int64(0); key < max; key++ {
+	var sequence int64
+	for value := range values {
 		batch.Put([]byte{
-			byte(key << 24),
-			byte(key << 16),
-			byte(key << 8),
-			byte(key << 0),
+			byte(sequence << 24),
+			byte(sequence << 16),
+			byte(sequence << 8),
+			byte(sequence << 0),
 		}, value)
 
-		if key%int64(batchsize) == 0 {
+		if sequence%int64(batchsize) == 0 {
 			if err := db.Write(batch, sync); err != nil {
 				return err
 			}
 			batch.Reset()
 		}
+		sequence++
 	}
 	if err := db.Write(batch, sync); err != nil {
 		return err
 	}
 
 	duration := time.Since(startedAt)
-	fmt.Printf("goleveldb: wrote %v msgs in %v, %.0f msgs/s\n", max, duration, float64(max)/duration.Seconds())
+	messageCount := sequence + 1
+	fmt.Printf("goleveldb: wrote %v msgs in %v, %.0f msgs/s\n", messageCount, duration, float64(messageCount)/duration.Seconds())
 	return nil
 }
