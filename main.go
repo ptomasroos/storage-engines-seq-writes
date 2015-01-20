@@ -16,7 +16,7 @@ import (
 
 func main() {
 	max := int64(10000000)
-	valueSize := 512
+	valueSize := 200
 
 	value := make([]byte, valueSize, valueSize)
 	for i := 0; i < valueSize; i++ {
