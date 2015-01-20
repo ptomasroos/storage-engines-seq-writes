@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"time"
 
@@ -14,7 +15,14 @@ import (
 
 func main() {
 	max := int64(10000000)
-	if err := writeWithGoleveldb(max, 2048); err != nil {
+	valueSize := 512
+
+	value := make([]byte, valueSize, valueSize)
+	for i := 0; i < valueSize; i++ {
+		value[i] = byte(rand.Intn(255))
+	}
+
+	if err := writeWithGoleveldb(max, 2048, value); err != nil {
 		fmt.Printf("goleveldb failed: %v\n", err.Error())
 	}
 	// if err := writeWithGocask(max); err != nil {
@@ -22,7 +30,7 @@ func main() {
 	// }
 }
 
-func writeWithGocask(max int64) error {
+func writeWithGocask(max int64, value []byte) error {
 	directory, err := ioutil.TempDir("", "bitcask_")
 	if err != nil {
 		panic(err)
@@ -36,7 +44,6 @@ func writeWithGocask(max int64) error {
 	defer os.Remove(directory)
 
 	startedAt := time.Now()
-	value := []byte("55016240139541825831248235590928388050342796869467125714573772729983527548255642386370229015656387150848807487151339461263449466723879128964904436408494889996394069979929819274982353154433671964674699212887561015326410385441664236925959164219332147778332925795309157503386333233233354364896239995422994795249191515403481140936553663279757290416787757496552237116627244982955104539916919213038155680710328503796426173973700453821840362580703647190956630678410710125906454173642027827141851167868952548")
 	for key := int64(0); key < max; key++ {
 		err := storage.Put(string(
 			[]byte{
@@ -56,7 +63,7 @@ func writeWithGocask(max int64) error {
 	return nil
 }
 
-func writeWithGoleveldb(max int64, batchsize int) error {
+func writeWithGoleveldb(max int64, batchsize int, value []byte) error {
 	directory, err := ioutil.TempDir("", "goleveldb_")
 	if err != nil {
 		return err
@@ -72,7 +79,6 @@ func writeWithGoleveldb(max int64, batchsize int) error {
 	sync := &opt.WriteOptions{Sync: true}
 
 	startedAt := time.Now()
-	value := []byte("5501624013954182583124823559092838805034279686946712571457377272998352754825564238637022901565638715084880748715133946126344946672387912896490443640849488999639406997992981927498235315443367196467469921288756101532641038544166423692595916421933214777833292")
 
 	batch := new(leveldb.Batch)
 	for key := int64(0); key < max; key++ {
