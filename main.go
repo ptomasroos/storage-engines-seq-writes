@@ -84,7 +84,7 @@ func main() {
 		fmt.Printf("levigo failed: %v\n", err.Error())
 	}
 
-	if err := writeWithGocask(max); err != nil {
+	if err := writeWithGocask(max, values); err != nil {
 		fmt.Printf("gocask failed: %v\n", err.Error())
 	}
 }
@@ -125,47 +125,47 @@ func writeSingleFileAppend(batchsize int, values chan []byte) error {
 	return nil
 }
 
-func writeWithPjvdsBitcask(batchsize int, values chan []byte) error {
-	directory, err := ioutil.TempDir("", "pjvds_bitcask_")
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("using directory: %v\n", directory)
-	storage, err := bc.Open(directory)
-	if err != nil {
-		panic(err)
-	}
-	defer storage.Close()
-	defer os.RemoveAll(directory)
-
-	startedAt := time.Now()
-
-	var sequence int64
-	for value := range values {
-		err := storage.Put([]byte{
-			byte(sequence << 24),
-			byte(sequence << 16),
-			byte(sequence << 8),
-			byte(sequence << 0),
-		}, value)
-
-		if err != nil {
-			panic(err)
-		}
-		if sequence%int64(batchsize) == 0 {
-			if err := storage.Sync(); err != nil {
-				panic(err)
-			}
-		}
-		sequence++
-	}
-
-	duration := time.Since(startedAt)
-	messageCount := sequence + 1
-	fmt.Printf("pjvdsbitcask: wrote %v msgs in %v, %.0f msgs/s\nwrite speed: %v mb/s\n", messageCount, duration, float64(messageCount)/duration.Seconds(), float64((messageCount*200)/1000/1000)/duration.Seconds())
-	return nil
-}
+// func writeWithPjvdsBitcask(batchsize int, values chan []byte) error {
+// 	directory, err := ioutil.TempDir("", "pjvds_bitcask_")
+// 	if err != nil {
+// 		panic(err)
+// 	}
+//
+// 	fmt.Printf("using directory: %v\n", directory)
+// 	storage, err := bc.Open(directory)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	defer storage.Close()
+// 	defer os.RemoveAll(directory)
+//
+// 	startedAt := time.Now()
+//
+// 	var sequence int64
+// 	for value := range values {
+// 		err := storage.Put([]byte{
+// 			byte(sequence << 24),
+// 			byte(sequence << 16),
+// 			byte(sequence << 8),
+// 			byte(sequence << 0),
+// 		}, value)
+//
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 		if sequence%int64(batchsize) == 0 {
+// 			if err := storage.Sync(); err != nil {
+// 				panic(err)
+// 			}
+// 		}
+// 		sequence++
+// 	}
+//
+// 	duration := time.Since(startedAt)
+// 	messageCount := sequence + 1
+// 	fmt.Printf("pjvdsbitcask: wrote %v msgs in %v, %.0f msgs/s\nwrite speed: %v mb/s\n", messageCount, duration, float64(messageCount)/duration.Seconds(), float64((messageCount*200)/1000/1000)/duration.Seconds())
+// 	return nil
+// }
 
 func writeWithGocask(batchsize int, values chan []byte) error {
 	directory, err := ioutil.TempDir("", "bitcask_")
