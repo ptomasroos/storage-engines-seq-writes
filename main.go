@@ -8,11 +8,14 @@ import (
 	"time"
 
 	"github.com/jmhodges/levigo"
+	"github.com/rcrowley/go-metrics"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 
 	"code.google.com/p/rayleyva-gocask"
 	jwzhbitcask "github.com/JWZH/bitcask_go"
+
+	"gopkg.in/mgo.v2"
 )
 
 func main() {
@@ -31,9 +34,11 @@ func main() {
 			values <- value
 		}
 	}()
-	if err := writeWiteJwzhBitcask(2048, values); err != nil {
-		fmt.Printf("jwzh bitcask failed: %v\n", err.Error())
+	if err := writeWithMgo(2048, values); err != nil {
+		fmt.Printf("mgo failed: %v\n", err.Error())
 	}
+
+	return
 
 	values = make(chan []byte, 1024)
 	go func() {
@@ -125,22 +130,95 @@ func writeSingleFileAppend(batchsize int, values chan []byte) error {
 	return nil
 }
 
-// func writeWithPjvdsBitcask(batchsize int, values chan []byte) error {
-// 	directory, err := ioutil.TempDir("", "pjvds_bitcask_")
+func writeWithMgo(batchsize int, values chan []byte) error {
+	session, err := mgo.Dial("localhost")
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+
+	sequence := 0
+
+	session.SetSafe(&mgo.Safe{
+		W:     1,
+		FSync: true,
+	})
+
+	globalCollection := session.DB("test").C("global")
+	globalCollection.RemoveAll(nil)
+
+	globalCollection.EnsureIndex(mgo.Index{
+		Key:        []string{"partition_key", "type"},
+		Unique:     false,
+		DropDups:   false,
+		Background: true,
+		Sparse:     false,
+	})
+
+	bulk := globalCollection.Bulk()
+
+	startedAt := time.Now()
+	batchStartedAt := time.Now()
+
+	timer := metrics.NewTimer()
+
+	for value := range values {
+		sequence += 1
+
+		bulk.Insert(map[string]interface{}{
+			"_id":           sequence,
+			"partition_key": sequence % 16,
+			"type":          "registration-requested",
+			"value":         value,
+		})
+
+		if sequence%batchsize == 0 {
+			_, err := bulk.Run()
+
+			if err != nil {
+				return err
+			}
+
+			if err := session.Fsync(false); err != nil {
+				return err
+			}
+
+			timer.UpdateSince(batchStartedAt)
+			batchStartedAt = time.Now()
+
+			bulk = globalCollection.Bulk()
+		}
+	}
+
+	_, err = bulk.Run()
+
+	if err != nil {
+		return err
+	}
+	duration := time.Since(startedAt)
+	messageCount := sequence
+	fmt.Printf("mgo: wrote %v msgs in %v, %.0f msgs/s\n", messageCount, duration, float64(messageCount)/duration.Seconds())
+	fmt.Printf("latency: %v", time.Duration(timer.Percentile(0.95)))
+
+	return nil
+}
+
+// func writeWithSeqcask(batchsize int, values chan []byte) error {
+// 	directory, err := ioutil.TempDir("", "pjvds_seqcask_")
 // 	if err != nil {
 // 		panic(err)
 // 	}
-//
+
 // 	fmt.Printf("using directory: %v\n", directory)
-// 	storage, err := bc.Open(directory)
+// 	storage, err := seqcask.Create(filepath.Join(directory, "db"))
 // 	if err != nil {
 // 		panic(err)
 // 	}
 // 	defer storage.Close()
 // 	defer os.RemoveAll(directory)
-//
+
 // 	startedAt := time.Now()
-//
+
 // 	var sequence int64
 // 	for value := range values {
 // 		err := storage.Put([]byte{
@@ -149,7 +227,7 @@ func writeSingleFileAppend(batchsize int, values chan []byte) error {
 // 			byte(sequence << 8),
 // 			byte(sequence << 0),
 // 		}, value)
-//
+
 // 		if err != nil {
 // 			panic(err)
 // 		}
@@ -160,7 +238,7 @@ func writeSingleFileAppend(batchsize int, values chan []byte) error {
 // 		}
 // 		sequence++
 // 	}
-//
+
 // 	duration := time.Since(startedAt)
 // 	messageCount := sequence + 1
 // 	fmt.Printf("pjvdsbitcask: wrote %v msgs in %v, %.0f msgs/s\nwrite speed: %v mb/s\n", messageCount, duration, float64(messageCount)/duration.Seconds(), float64((messageCount*200)/1000/1000)/duration.Seconds())
